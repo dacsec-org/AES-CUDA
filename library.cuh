@@ -1,0 +1,6 @@
+#ifndef AES_CUDA_KERNELS_LIBRARY_CUH
+#define AES_CUDA_KERNELS_LIBRARY_CUH
+
+__global__ void hello();
+
+#endif //AES_CUDA_KERNELS_LIBRARY_CUH
