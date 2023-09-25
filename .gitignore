@@ -4,3 +4,9 @@
 *.ptx
 *.cubin
 *.fatbin
+
+### .idea files ###
+.idea
+
+### cmake-build-debug files ###
+cmake-build-debug
