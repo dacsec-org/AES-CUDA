@@ -26,47 +26,6 @@ This repository provides a GPU-accelerated solution for AES (Advanced Encryption
 
 [//]: # (5. Make sure to include the necessary header files in your code.)
 
-[//]: # (## Usage)
-
-[//]: # ()
-[//]: # (To encrypt data using the GPU-accelerated AES encryption:)
-
-[//]: # (#include "aes_encrypt_kernel.cuh")
-
-[//]: # ()
-[//]: # (// Initialize AES key and input data)
-
-[//]: # (unsigned char key[32] = { /* AES key */ };)
-
-[//]: # (unsigned char plaintext[16] = { /* Input data */ };)
-
-[//]: # ()
-[//]: # (// Encrypt the data using the GPU-accelerated AES encryption kernel)
-
-[//]: # (aes_encrypt_gpu&#40;key, plaintext&#41;;)
-
-[//]: # ()
-[//]: # (// The encrypted data is now stored in the 'plaintext' array)
-
-[//]: # (To decrypt data using the GPU-accelerated AES decryption:)
-
-[//]: # (#include "aes_decrypt_kernel.cuh")
-
-[//]: # ()
-[//]: # (// Initialize AES key and encrypted data)
-
-[//]: # (unsigned char key[32] = { /* AES key */ };)
-
-[//]: # (unsigned char ciphertext[16] = { /* Encrypted data */ };)
-
-[//]: # ()
-[//]: # (// Decrypt the data using the GPU-accelerated AES decryption kernel)
-
-[//]: # (aes_decrypt_gpu&#40;key, ciphertext&#41;;)
-
-[//]: # ()
-[//]: # (// The decrypted data is now stored in the 'ciphertext' array)
-
 ## Performance
 
 The GPU acceleration provided by this repository offers significant performance improvements compared to traditional CPU-based AES encryption/decryption. The parallel processing capabilities of the GPU enable faster and more efficient encryption and decryption of data, making it ideal for applications that require high-speed cryptographic operations.
@@ -84,9 +43,18 @@ Contributions to this repository are welcome. If you have any ideas, improvement
 
 We would like to express our gratitude to the CUDA development team for providing the powerful tools and frameworks that made this GPU-accelerated AES encryption/decryption solution possible.
 
+## Disclaimer
+
+The kernels in this repository are not sponsored, developed, or have anything to do with
+  NVIDIA. Use at your own risk!!
+
 [//]: # (## Contact)
 
 [//]: # ()
 [//]: # (If you have any questions, suggestions, or feedback, please don't hesitate to contact us at [email protected] We would be happy to assist you.)
+
+## WARNING DO NOT TRY TO COMPILE, OR USE KERNELS!!
+
+This project is in its infancy stage of development.
 
 Happy GPU-accelerated AES encryption/decryption!
