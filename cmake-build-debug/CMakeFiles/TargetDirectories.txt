@@ -1,3 +1,0 @@
-/home/ax56/.projects/Cprojects/AES-CUDA-Kernels/cmake-build-debug/CMakeFiles/AES_CUDA_Kernels.dir
-/home/ax56/.projects/Cprojects/AES-CUDA-Kernels/cmake-build-debug/CMakeFiles/edit_cache.dir
-/home/ax56/.projects/Cprojects/AES-CUDA-Kernels/cmake-build-debug/CMakeFiles/rebuild_cache.dir
