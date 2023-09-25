@@ -13,7 +13,6 @@
  */
 #include <cuda_runtime.h>
 #include <iostream>
-
 // Macro for checking CUDA errors
 #define CUDA_CHECK(call) \
 do { \
@@ -23,9 +22,175 @@ do { \
         exit(1); \
     } \
 } while(0)
-
-// SubBytes table
-__device__ __constant__ uint8_t subBytesTable[16][16] = {
+class AesEncryptor {
+public:
+    AesEncryptor() {
+        // Get CUDA device properties
+        cudaDeviceProp deviceProps{};
+        CUDA_CHECK(cudaGetDeviceProperties(&deviceProps, 0));
+        // Get available global memory
+        size_t totalGlobalMem, freeGlobalMem;
+        CUDA_CHECK(cudaMemGetInfo(&freeGlobalMem, &totalGlobalMem));
+        // Calculate data size based on available memory
+        dataSize_ = freeGlobalMem * 0.8;
+        // Calculate number of blocks and threads per block
+        numBlocks_ = (dataSize_ + 15) / 16;
+        numThreadsPerBlock_ = 256;
+        // Allocate memory on GPU for input, output, and key
+        CUDA_CHECK(cudaMalloc((void**)&input_gpu_, dataSize_));
+        CUDA_CHECK(cudaMalloc((void**)&output_gpu_, dataSize_));
+        CUDA_CHECK(cudaMalloc((void**)&key_gpu_, 176));
+    }
+    ~AesEncryptor() {
+        // Free GPU memory
+        CUDA_CHECK(cudaFree(input_gpu_));
+        CUDA_CHECK(cudaFree(output_gpu_));
+        CUDA_CHECK(cudaFree(key_gpu_));
+    }
+    void Encrypt(const uint8_t* input, uint8_t* output, const uint8_t* key) {
+        // Copy input and key from host to GPU
+        CUDA_CHECK(cudaMemcpy(input_gpu_, input, dataSize_, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(key_gpu_, key, 176, cudaMemcpyHostToDevice));
+        // Set block and grid dimensions
+        dim3 blockDims(numThreadsPerBlock_, 1, 1);
+        dim3 gridDims(numBlocks_, 1, 1);
+        // Launch AES encryption kernel
+        aesEncryptKernel<<<gridDims, blockDims>>>(input_gpu_, output_gpu_, key_gpu_);
+        // Check for kernel launch errors
+        CUDA_CHECK(cudaGetLastError());
+        // Copy output from GPU to host
+        CUDA_CHECK(cudaMemcpy(output, output_gpu_, dataSize_, cudaMemcpyDeviceToHost));
+    }
+    [[nodiscard]] size_t getDataSize() const {
+        return dataSize_;
+    }
+private:
+    size_t dataSize_;
+    int numBlocks_;
+    int numThreadsPerBlock_;
+    uint8_t* input_gpu_{};
+    uint8_t* output_gpu_{};
+    uint8_t* key_gpu_{};
+    // SubBytes table
+    static __device__ __constant__ uint8_t subBytesTable[16][16];
+    // MixColumns matrix
+    static __device__ __constant__ uint8_t mixColumnsMatrix[4][4];
+    // Function to multiply two 8-bit values
+    static __device__ uint8_t multiply(uint8_t a, uint8_t b) {
+        uint8_t result = 0;
+        uint8_t mask = 0x01;
+        uint8_t p = 0x00;
+        for (int i = 0; i < 8; i++) {
+            if (b & mask) {
+                p ^= a;
+            }
+            uint8_t msb = a & 0x80;
+            a <<= 1;
+            if (msb) {
+                a ^= 0x1B;  // XOR with the irreducible polynomial x^8 + x^4 + x^3 + x + 1
+            }
+            mask <<= 1;
+        }
+        return p;
+    }
+    // CUDA kernel for AES encryption
+    static __global__ void aesEncryptKernel(const uint8_t* input, uint8_t* output, const uint8_t* key) {
+        // Variable declarations
+        unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        int round;
+        uint8_t state[16];
+        // Copy input to state
+        for (int i = 0; i < 16; i++) {
+            state[i] = input[idx * 16 + i];
+        }
+        // AddRoundKey for round 0
+        for (int i = 0; i < 16; i++) {
+            state[i] ^= key[i];
+        }
+        // AES encryption algorithm
+        for (round = 1; round <= 9; round++) {
+            // SubBytes
+            for (unsigned char& i : state) {
+                int row = (i >> 4) & 0x0F;
+                int col = i & 0x0F;
+                i = subBytesTable[row][col];
+            }
+            // Shift the 1'st row to the right
+            uint8_t temp = state[1];
+            state[1] = state[5];
+            state[5] = state[9];
+            state[9] = state[13];
+            state[13] = temp;
+            // Shift the 2'nd row to the right
+            temp = state[2];
+            state[2] = state[10];
+            state[10] = temp;
+            // Shift the 3'rd row to the right
+            temp = state[3];
+            state[3] = state[15];
+            state[15] = state[11];
+            state[11] = state[7];
+            state[7] = temp;
+            // MixColumns
+            for (int col = 0; col < 4; col++) {
+                uint8_t s0 = state[col];
+                uint8_t s1 = state[col + 4];
+                uint8_t s2 = state[col + 8];
+                uint8_t s3 = state[col + 12];
+                state[col] = multiply(s0, mixColumnsMatrix[0][0]) ^
+                             multiply(s1, mixColumnsMatrix[0][1]) ^
+                             multiply(s2, mixColumnsMatrix[0][2]) ^
+                             multiply(s3, mixColumnsMatrix[0][3]);
+                state[col + 4] = multiply(s0, mixColumnsMatrix[1][0]) ^
+                                 multiply(s1, mixColumnsMatrix[1][1]) ^
+                                 multiply(s2, mixColumnsMatrix[1][2]) ^
+                                 multiply(s3, mixColumnsMatrix[1][3]);
+                state[col + 8] = multiply(s0, mixColumnsMatrix[2][0]) ^
+                                 multiply(s1, mixColumnsMatrix[2][1]) ^
+                                 multiply(s2, mixColumnsMatrix[2][2]) ^
+                                 multiply(s3, mixColumnsMatrix[2][3]);
+                state[col + 12] = multiply(s0, mixColumnsMatrix[3][0]) ^
+                                  multiply(s1, mixColumnsMatrix[3][1]) ^
+                                  multiply(s2, mixColumnsMatrix[3][2]) ^
+                                  multiply(s3, mixColumnsMatrix[3][3]);
+            }
+            // AddRoundKey
+            for (int i = 0; i < 16; i++) {
+                state[i] ^= key[round * 16 + i];
+            }
+        }
+        // SubBytes
+        for (unsigned char& i : state) {
+            int row = (i >> 4) & 0x0F;
+            int col = i & 0x0F;
+            i = subBytesTable[row][col];
+        }
+        // After mix columns are multiplied, ShiftRows again to the right
+        uint8_t temp = state[1];
+        state[1] = state[5];
+        state[5] = state[9];
+        state[9] = state[13];
+        state[13] = temp;
+        temp = state[2];
+        state[2] = state[10];
+        state[10] = temp;
+        temp = state[3];
+        state[3] = state[15];
+        state[15] = state[11];
+        state[11] = state[7];
+        state[7] = temp;
+        // AddRoundKey for round 10
+        for (int i = 0; i < 16; i++) {
+            state[i] ^= key[160 + i];
+        }
+        // Copy state to output
+        for (int i = 0; i < 16; i++) {
+            output[idx * 16 + i] = state[i];
+        }
+    }
+};
+// Initialize constant arrays
+__device__ __constant__ uint8_t AesEncryptor::subBytesTable[16][16] = {
         {0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30,
                 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76},
         {0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad,
@@ -59,190 +224,45 @@ __device__ __constant__ uint8_t subBytesTable[16][16] = {
         {0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41,
                 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16}
 };
-
-// MixColumns matrix
-__device__ __constant__ uint8_t mixColumnsMatrix[4][4] = {
+__device__ __constant__ uint8_t AesEncryptor::mixColumnsMatrix[4][4] = {
         {0x02, 0x03, 0x01, 0x01},
         {0x01, 0x02, 0x03, 0x01},
         {0x01, 0x01, 0x02, 0x03},
         {0x03, 0x01, 0x01, 0x02}
 };
-
-// Function to multiply two 8-bit values
-__device__ uint8_t multiply(uint8_t a, uint8_t b) {
-    uint8_t result = 0;
-    uint8_t mask = 0x01;
-    uint8_t p = 0x00;
-    for (int i = 0; i < 8; i++) {
-        if (b & mask) {
-            p ^= a;
-        }
-        uint8_t msb = a & 0x80;
-        a <<= 1;
-        if (msb) {
-            a ^= 0x1B;  // XOR with the irreducible polynomial x^8 + x^4 + x^3 + x + 1
-        }
-        mask <<= 1;
-    }
-    return p;
-}
-
-// CUDA kernel for AES encryption
-__global__ void aesEncryptKernel(const uint8_t* input, uint8_t* output, const uint8_t* key)
-{
-    unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int round;
-    uint8_t state[16];
-
-    // Copy input to state
+// Function to get input from user
+void getInput(uint8_t* input) {
+    std::cout << "Enter input data (16 bytes in hexadecimal): ";
     for (int i = 0; i < 16; i++) {
-        state[i] = input[idx * 16 + i];
-    }
-
-    // AddRoundKey for round 0
-    for (int i = 0; i < 16; i++) {
-        state[i] ^= key[i];
-    }
-
-    // AES encryption algorithm
-    for (round = 1; round <= 9; round++) {
-        // SubBytes
-        for (unsigned char & i : state) {
-            int row = (i >> 4) & 0x0F;
-            int col = i & 0x0F;
-            i = subBytesTable[row][col];
-        }
-
-        // Shift the first Row the right
-        uint8_t temp = state[1];
-        state[1] = state[5];
-        state[5] = state[9];
-        state[9] = state[13];
-        state[13] = temp;
-        // Shift the second Row the right
-        temp = state[2];
-        state[2] = state[10];
-        state[10] = temp;
-        // Shift the third Row the right
-        temp = state[3];
-        state[3] = state[15];
-        state[15] = state[11];
-        state[11] = state[7];
-        state[7] = temp;
-
-        // MixColumns
-        for (int col = 0; col < 4; col++) {
-            uint8_t s0 = state[col];
-            uint8_t s1 = state[col + 4];
-            uint8_t s2 = state[col + 8];
-            uint8_t s3 = state[col + 12];
-            state[col] = multiply(s0, mixColumnsMatrix[0][0]) ^
-                         multiply(s1, mixColumnsMatrix[0][1]) ^
-                         multiply(s2, mixColumnsMatrix[0][2]) ^
-                         multiply(s3, mixColumnsMatrix[0][3]);
-            state[col + 4] = multiply(s0, mixColumnsMatrix[1][0]) ^
-                             multiply(s1, mixColumnsMatrix[1][1]) ^
-                             multiply(s2, mixColumnsMatrix[1][2]) ^
-                             multiply(s3, mixColumnsMatrix[1][3]);
-            state[col + 8] = multiply(s0, mixColumnsMatrix[2][0]) ^
-                             multiply(s1, mixColumnsMatrix[2][1]) ^
-                             multiply(s2, mixColumnsMatrix[2][2]) ^
-                             multiply(s3, mixColumnsMatrix[2][3]);
-            state[col + 12] = multiply(s0, mixColumnsMatrix[3][0]) ^
-                              multiply(s1, mixColumnsMatrix[3][1]) ^
-                              multiply(s2, mixColumnsMatrix[3][2]) ^
-                              multiply(s3, mixColumnsMatrix[3][3]);
-        }
-
-        // AddRoundKey
-        for (int i = 0; i < 16; i++) {
-            state[i] ^= key[round * 16 + i];
-        }
-    }
-
-    // SubBytes
-    for (unsigned char & i : state) {
-        int row = (i >> 4) & 0x0F;
-        int col = i & 0x0F;
-        i = subBytesTable[row][col];
-    }
-
-    // shift the 1'st row to the right
-    uint8_t temp = state[1];
-    state[1] = state[5];
-    state[5] = state[9];
-    state[9] = state[13];
-    state[13] = temp;
-    // shift the 2'nd row to the right
-    temp = state[2];
-    state[2] = state[10];
-    state[10] = temp;
-    // shift the 3'rd row to the right
-    temp = state[3];
-    state[3] = state[15];
-    state[15] = state[11];
-    state[11] = state[7];
-    state[7] = temp;
-
-    // AddRoundKey for round 10
-    for (int i = 0; i < 16; i++) {
-        state[i] ^= key[round * 16 + i];
-    }
-
-    // Copy state to output
-    for (int i = 0; i < 16; i++) {
-        output[idx * 16 + i] = state[i];
+        std::cin >> std::hex >> input[i];
     }
 }
-
-int main()
-{
-    // Get CUDA device properties
-    cudaDeviceProp deviceProps{};
-    CUDA_CHECK(cudaGetDeviceProperties(&deviceProps, 0));
-
-    // Get available global memory
-    size_t totalGlobalMem, freeGlobalMem;
-    CUDA_CHECK(cudaMemGetInfo(&freeGlobalMem, &totalGlobalMem));
-
-    // Calculate data size based on available memory
-    const size_t dataSize = freeGlobalMem * 0.8;
-
-    // Calculate number of blocks and threads per block
-    const int numBlocks = (dataSize + 15) / 16;
-    const int numThreadsPerBlock = 256;
-
-    // Allocate memory on GPU for input, output, and key
-    uint8_t* input_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&input_gpu, dataSize));
-    uint8_t* output_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&output_gpu, dataSize));
-    uint8_t* key_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&key_gpu, 176));
-
-    // Set block and grid dimensions
-    dim3 blockDims(numThreadsPerBlock, 1, 1);
-    dim3 gridDims(numBlocks, 1, 1);
-
-    // Launch AES encryption kernel
-    aesEncryptKernel<<<gridDims, blockDims>>>(input_gpu, output_gpu, key_gpu);
-
-    // Check for kernel launch errors
-    CUDA_CHECK(cudaGetLastError());
-
-    // Allocate host memory for output
-    auto* output = new uint8_t[dataSize];
-
-    // Copy output from GPU to host
-    CUDA_CHECK(cudaMemcpy(output, output_gpu, dataSize, cudaMemcpyDeviceToHost));
-
-    // Free GPU memory
-    CUDA_CHECK(cudaFree(input_gpu));
-    CUDA_CHECK(cudaFree(output_gpu));
-    CUDA_CHECK(cudaFree(key_gpu));
-
-    // Free host memory
-    delete[] output;
-
+// Function to get key from user
+void getKey(uint8_t* key) {
+    std::cout << "Enter key data (176 bytes in hexadecimal): ";
+    for (int i = 0; i < 176; i++) {
+        std::cin >> std::hex >> key[i];
+    }
+}
+int main() {
+    // Test the AesEncryptor class
+    AesEncryptor encryptor;
+    // Test input data
+    uint8_t input[16];
+    getInput(input);
+    // Test key data
+    uint8_t key[176];
+    getKey(key);
+    // Perform encryption
+    uint8_t output[16];
+    encryptor.Encrypt(input, output, key);
+    // Print the encrypted output
+    for (unsigned char i : output) {
+        std::cout << std::hex << static_cast<int>(i) << " ";
+    }
+    std::cout << std::endl;
+    // Get the data size
+    size_t dataSize = encryptor.getDataSize();
+    std::cout << "Data size: " << dataSize << std::endl;
     return 0;
 }

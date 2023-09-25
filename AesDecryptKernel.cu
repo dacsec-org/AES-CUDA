@@ -1,19 +1,5 @@
-/*
- * The `aesDecryptKernel` is a CUDA kernel that performs AES decryption on the input data.
- * It takes three arguments: `const uint8_t* input`, `uint8_t* output`, and `const uint8_t* key`.
- * The kernel is launched with a grid of `numBlocks` blocks and `blockDims` threads per block.
- * The kernel implements the AES decryption algorithm by applying the inverse transformations to the input data.
- * It consists of multiple rounds, each performing the inverse of SubBytes, ShiftRows, MixColumns, and AddRoundKey operations.
- * The inverse SubBytes operation replaces each byte with a corresponding value from the inverse SubBytes table.
- * The inverse ShiftRows operation shifts the bytes in each row to the right.
- * The inverse MixColumns operation performs a matrix multiplication on each column of the state using the inverse MixColumns matrix.
- * The inverse AddRoundKey operation XORs the state with the round key.
- * After the last round, the inverse SubBytes and inverse ShiftRows operations are performed again, followed by the final inverse AddRoundKey operation.
- * The resulting state is then copied to the output array.
- */
 #include <cuda_runtime.h>
 #include <iostream>
-
 // Macro for checking CUDA errors
 #define CUDA_CHECK(call) \
 do { \
@@ -23,9 +9,181 @@ do { \
         exit(1); \
     } \
 } while(0)
-
-// Inverse SubBytes table
-__device__ __constant__ uint8_t invSubBytesTable[16][16] = {
+class AesDecryptor {
+public:
+    AesDecryptor() {
+        // Get CUDA device properties
+        cudaDeviceProp deviceProps{};
+        CUDA_CHECK(cudaGetDeviceProperties(&deviceProps, 0));
+        // Get available global memory
+        size_t totalGlobalMem, freeGlobalMem;
+        CUDA_CHECK(cudaMemGetInfo(&freeGlobalMem, &totalGlobalMem));
+        // Calculate data size based on available memory
+        dataSize_ = freeGlobalMem * 0.8;
+        // Calculate number of blocks and threads per block
+        numBlocks_ = (dataSize_ + 15) / 16;
+        numThreadsPerBlock_ = 256;
+        // Allocate memory on GPU for input, output, and key
+        CUDA_CHECK(cudaMalloc((void**)&input_gpu_, dataSize_));
+        CUDA_CHECK(cudaMalloc((void**)&output_gpu_, dataSize_));
+        CUDA_CHECK(cudaMalloc((void**)&key_gpu_, 176));
+    }
+    ~AesDecryptor() {
+        // Free GPU memory
+        CUDA_CHECK(cudaFree(input_gpu_));
+        CUDA_CHECK(cudaFree(output_gpu_));
+        CUDA_CHECK(cudaFree(key_gpu_));
+    }
+    void Decrypt(const uint8_t* input, uint8_t* output, const uint8_t* key) {
+        // Copy input and key from host to GPU
+        CUDA_CHECK(cudaMemcpy(input_gpu_, input, dataSize_, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(key_gpu_, key, 176, cudaMemcpyHostToDevice));
+        // Set block and grid dimensions
+        dim3 blockDims(numThreadsPerBlock_, 1, 1);
+        dim3 gridDims(numBlocks_, 1, 1);
+        // Launch AES decryption kernel
+        aesDecryptKernel<<<gridDims, blockDims>>>(input_gpu_, output_gpu_, key_gpu_);
+        // Check for kernel launch errors
+        CUDA_CHECK(cudaGetLastError());
+        // Copy output from GPU to host
+        CUDA_CHECK(cudaMemcpy(output, output_gpu_, dataSize_, cudaMemcpyDeviceToHost));
+    }
+    [[nodiscard]] size_t getDataSize() const {
+        return dataSize_;
+    }
+private:
+    size_t dataSize_;
+    int numBlocks_;
+    int numThreadsPerBlock_;
+    uint8_t* input_gpu_{};
+    uint8_t* output_gpu_{};
+    uint8_t* key_gpu_{};
+    // Inverse SubBytes table
+    static __device__ __constant__ uint8_t invSubBytesTable[16][16];
+    // Inverse MixColumns matrix
+    static __device__ __constant__ uint8_t invMixColumnsMatrix[4][4];
+    // Function to multiply two 8-bit values
+    static __device__ uint8_t multiply(uint8_t a, uint8_t b) {
+        uint8_t result = 0;
+        uint8_t mask = 0x01;
+        uint8_t p = 0x00;
+        for (int i = 0; i < 8; i++) {
+            if (b & mask) {
+                p ^= a;
+            }
+            uint8_t msb = a & 0x80;
+            a <<= 1;
+            if (msb) {
+                a ^= 0x1B;  // XOR with the irreducible polynomial x^8 + x^4 + x^3 + x + 1
+            }
+            mask <<= 1;
+        }
+        return p;
+    }
+    // CUDA kernel for AES decryption
+    static __global__ void aesDecryptKernel(const uint8_t* input, uint8_t* output, const uint8_t* key) {
+        // Variable declarations
+        unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+        int round;
+        uint8_t state[16];
+        // Copy input to state
+        for (int i = 0; i < 16; i++) {
+            state[i] = input[idx * 16 + i];
+        }
+        // AddRoundKey for round 10
+        for (int i = 0; i < 16; i++) {
+            state[i] ^= key[160 + i];
+        }
+        // AES decryption algorithm
+        for (round = 9; round >= 1; round--) {
+            // Shift the 13'th Row the left
+            uint8_t temp = state[13];
+            state[13] = state[9];
+            state[9] = state[5];
+            state[5] = state[1];
+            state[1] = temp;
+            // Shift the 10'th Row the left
+            temp = state[10];
+            state[10] = state[2];
+            state[2] = temp;
+            // Shift the 7'th Row the right
+            temp = state[7];
+            state[7] = state[11];
+            state[11] = state[15];
+            state[15] = state[3];
+            state[3] = temp;
+            // Inverse SubBytes
+            for (unsigned char& i : state) {
+                int row = (i >> 4) & 0x0F;
+                int col = i & 0x0F;
+                i = invSubBytesTable[row][col];
+            }
+            // AddRoundKey
+            for (int i = 0; i < 16; i++) {
+                state[i] ^= key[round * 16 + i];
+            }
+            // Inverse MixColumns
+            for (int col = 0; col < 4; col++) {
+                uint8_t s0 = state[col];
+                uint8_t s1 = state[col + 4];
+                uint8_t s2 = state[col + 8];
+                uint8_t s3 = state[col + 12];
+                state[col] = multiply(s0, invMixColumnsMatrix[0][0]) ^
+                    multiply(s1, invMixColumnsMatrix[0][1]) ^
+                    multiply(s2, invMixColumnsMatrix[0][2]) ^
+                    multiply(s3, invMixColumnsMatrix[0][3]);
+                state[col + 4] = multiply(s0, invMixColumnsMatrix[1][0]) ^
+                    multiply(s1, invMixColumnsMatrix[1][1]) ^
+                    multiply(s2, invMixColumnsMatrix[1][2]) ^
+                    multiply(s3, invMixColumnsMatrix[1][3]);
+                state[col + 8] = multiply(s0, invMixColumnsMatrix[2][0]) ^
+                    multiply(s1, invMixColumnsMatrix[2][1]) ^
+                    multiply(s2, invMixColumnsMatrix[2][2]) ^
+                    multiply(s3, invMixColumnsMatrix[2][3]);
+                state[col + 12] = multiply(s0, invMixColumnsMatrix[3][0]) ^
+                    multiply(s1, invMixColumnsMatrix[3][1]) ^
+                    multiply(s2, invMixColumnsMatrix[3][2]) ^
+                    multiply(s3, invMixColumnsMatrix[3][3]);
+            }
+            // Inverse SubBytes
+            for (unsigned char& i : state) {
+                int row = (i >> 4) & 0x0F;
+                int col = i & 0x0F;
+                i = invSubBytesTable[row][col];
+            }
+        }
+        // After Inverse mix columns are multiplied, Inverse ShiftRows again to the left
+        uint8_t temp = state[13];
+        state[13] = state[9];
+        state[9] = state[5];
+        state[5] = state[1];
+        state[1] = temp;
+        temp = state[10];
+        state[10] = state[2];
+        state[2] = temp;
+        temp = state[7];
+        state[7] = state[11];
+        state[11] = state[15];
+        state[15] = state[3];
+        state[3] = temp;
+        // Inverse SubBytes
+        for (unsigned char& i : state) {
+            int row = (i >> 4) & 0x0F;
+            int col = i & 0x0F;
+            i = invSubBytesTable[row][col];
+        }
+        // AddRoundKey for round 0
+        for (int i = 0; i < 16; i++) {
+            state[i] ^= key[i];
+        }
+        // Copy state to output
+        for (int i = 0; i < 16; i++) {
+            output[idx * 16 + i] = state[i];
+        }
+    }
+};
+// Initialize constant arrays
+__device__ __constant__ uint8_t AesDecryptor::invSubBytesTable[16][16] = {
         {0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf,
                 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb},
         {0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34,
@@ -59,197 +217,45 @@ __device__ __constant__ uint8_t invSubBytesTable[16][16] = {
         {0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1,
                 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d}
 };
-
-// Inverse MixColumns matrix
-__device__ __constant__ uint8_t invMixColumnsMatrix[4][4] = {
+__device__ __constant__ uint8_t AesDecryptor::invMixColumnsMatrix[4][4] = {
         {0x0e, 0x0b, 0x0d, 0x09},
         {0x09, 0x0e, 0x0b, 0x0d},
         {0x0d, 0x09, 0x0e, 0x0b},
         {0x0b, 0x0d, 0x09, 0x0e}
 };
-
-// Function to multiply two 8-bit values
-__device__ uint8_t multiply(uint8_t a, uint8_t b) {
-    uint8_t result = 0;
-    uint8_t mask = 0x01;
-    uint8_t p = 0x00;
-    for (int i = 0; i < 8; i++) {
-        if (b & mask) {
-            p ^= a;
-        }
-        uint8_t msb = a & 0x80;
-        a <<= 1;
-        if (msb) {
-            a ^= 0x1B;  // XOR with the irreducible polynomial x^8 + x^4 + x^3 + x + 1
-        }
-        mask <<= 1;
-    }
-    return p;
-}
-
-// CUDA kernel for AES decryption
-__global__ void aesDecryptKernel(const uint8_t* input, uint8_t* output, const uint8_t* key)
-{
-    // Variable declarations
-    unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int round;
-    uint8_t state[16];
-
-    // Copy input to state
+// Function to get input from user
+void getInput(uint8_t* input) {
+    std::cout << "Enter input data (16 bytes in hexadecimal): ";
     for (int i = 0; i < 16; i++) {
-        state[i] = input[idx * 16 + i];
-    }
-
-    // AddRoundKey for round 10
-    for (int i = 0; i < 16; i++) {
-        state[i] ^= key[160 + i];
-    }
-
-    // AES decryption algorithm
-    for (round = 9; round >= 1; round--) {
-
-        // Shift the 13'th Row the left
-        uint8_t temp = state[13];
-        state[13] = state[9];
-        state[9] = state[5];
-        state[5] = state[1];
-        state[1] = temp;
-        // Shift the 10'th Row the left
-        temp = state[10];
-        state[10] = state[2];
-        state[2] = temp;
-        // Shift the 7'th Row the right
-        temp = state[7];
-        state[7] = state[11];
-        state[11] = state[15];
-        state[15] = state[3];
-        state[3] = temp;
-
-        // Inverse SubBytes
-        for (unsigned char & i : state) {
-            int row = (i >> 4) & 0x0F;
-            int col = i & 0x0F;
-            i = invSubBytesTable[row][col];
-        }
-
-        // AddRoundKey
-        for (int i = 0; i < 16; i++) {
-            state[i] ^= key[round * 16 + i];
-        }
-
-        // Inverse MixColumns
-        for (int col = 0; col < 4; col++) {
-            uint8_t s0 = state[col];
-            uint8_t s1 = state[col + 4];
-            uint8_t s2 = state[col + 8];
-            uint8_t s3 = state[col + 12];
-            state[col] = multiply(s0, invMixColumnsMatrix[0][0]) ^
-                         multiply(s1, invMixColumnsMatrix[0][1]) ^
-                         multiply(s2, invMixColumnsMatrix[0][2]) ^
-                         multiply(s3, invMixColumnsMatrix[0][3]);
-            state[col + 4] = multiply(s0, invMixColumnsMatrix[1][0]) ^
-                             multiply(s1, invMixColumnsMatrix[1][1]) ^
-                             multiply(s2, invMixColumnsMatrix[1][2]) ^
-                             multiply(s3, invMixColumnsMatrix[1][3]);
-            state[col + 8] = multiply(s0, invMixColumnsMatrix[2][0]) ^
-                             multiply(s1, invMixColumnsMatrix[2][1]) ^
-                             multiply(s2, invMixColumnsMatrix[2][2]) ^
-                             multiply(s3, invMixColumnsMatrix[2][3]);
-            state[col + 12] = multiply(s0, invMixColumnsMatrix[3][0]) ^
-                              multiply(s1, invMixColumnsMatrix[3][1]) ^
-                              multiply(s2, invMixColumnsMatrix[3][2]) ^
-                              multiply(s3, invMixColumnsMatrix[3][3]);
-        }
-
-        // Inverse SubBytes
-        for (unsigned char & i : state) {
-            int row = (i >> 4) & 0x0F;
-            int col = i & 0x0F;
-            i = invSubBytesTable[row][col];
-        }
-    }
-
-    // Inverse ShiftRows
-    uint8_t temp = state[13];
-    state[13] = state[9];
-    state[9] = state[5];
-    state[5] = state[1];
-    state[1] = temp;
-    temp = state[10];
-    state[10] = state[2];
-    state[2] = temp;
-    temp = state[7];
-    state[7] = state[11];
-    state[11] = state[15];
-    state[15] = state[3];
-    state[3] = temp;
-
-    // Inverse SubBytes
-    for (unsigned char & i : state) {
-        int row = (i >> 4) & 0x0F;
-        int col = i & 0x0F;
-        i = invSubBytesTable[row][col];
-    }
-
-    // AddRoundKey for round 0
-    for (int i = 0; i < 16; i++) {
-        state[i] ^= key[i];
-    }
-
-    // Copy state to output
-    for (int i = 0; i < 16; i++) {
-        output[idx * 16 + i] = state[i];
+        std::cin >> std::hex >> input[i];
     }
 }
-
-int main()
-{
-    // Get CUDA device properties
-    cudaDeviceProp deviceProps{};
-    CUDA_CHECK(cudaGetDeviceProperties(&deviceProps, 0));
-
-    // Get available global memory
-    size_t totalGlobalMem, freeGlobalMem;
-    CUDA_CHECK(cudaMemGetInfo(&freeGlobalMem, &totalGlobalMem));
-
-    // Calculate data size based on available memory
-    const size_t dataSize = freeGlobalMem * 0.8;
-
-    // Calculate number of blocks and threads per block
-    const int numBlocks = (dataSize + 15) / 16;
-    const int numThreadsPerBlock = 256;
-
-    // Allocate memory on GPU for input, output, and key
-    uint8_t* input_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&input_gpu, dataSize));
-    uint8_t* output_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&output_gpu, dataSize));
-    uint8_t* key_gpu;
-    CUDA_CHECK(cudaMalloc((void**)&key_gpu, 176));
-
-    // Set block and grid dimensions
-    dim3 blockDims(numThreadsPerBlock, 1, 1);
-    dim3 gridDims(numBlocks, 1, 1);
-
-    // Launch AES decryption kernel
-    aesDecryptKernel<<<gridDims, blockDims>>>(input_gpu, output_gpu, key_gpu);
-
-    // Check for kernel launch errors
-    CUDA_CHECK(cudaGetLastError());
-
-    // Allocate host memory for output
-    auto* output = new uint8_t[dataSize];
-
-    // Copy output from GPU to host
-    CUDA_CHECK(cudaMemcpy(output, output_gpu, dataSize, cudaMemcpyDeviceToHost));
-
-    // Free GPU memory
-    CUDA_CHECK(cudaFree(input_gpu));
-    CUDA_CHECK(cudaFree(output_gpu));
-    CUDA_CHECK(cudaFree(key_gpu));
-
-    // Free host memory
-    delete[] output;
-
+// Function to get key from user
+void getKey(uint8_t* key) {
+    std::cout << "Enter key data (176 bytes in hexadecimal): ";
+    for (int i = 0; i < 176; i++) {
+        std::cin >> std::hex >> key[i];
+    }
+}
+int main() {
+    // Test the AesDecryptor class
+    AesDecryptor decryptor;
+    // Test input data
+    uint8_t input[16];
+    getInput(input);
+    // Test key data
+    uint8_t key[176];
+    getKey(key);
+    // Perform decryption
+    uint8_t output[16];
+    decryptor.Decrypt(input, output, key);
+    // Print the decrypted output
+    for (unsigned char i : output) {
+        std::cout << std::hex << static_cast<int>(i) << " ";
+    }
+    std::cout << std::endl;
+    // Get the data size
+    size_t dataSize = decryptor.getDataSize();
+    std::cout << "Data size: " << dataSize << std::endl;
     return 0;
 }
