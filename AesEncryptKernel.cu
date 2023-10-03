@@ -13,6 +13,13 @@
  */
 #include <cuda_runtime.h>
 #include <iostream>
+#include <fstream>
+#include <vector>
+#include <sstream>
+#include <iomanip>
+#include <string>
+#include <algorithm>
+
 // Macro for checking CUDA errors
 #define CUDA_CHECK(call) \
 do { \
@@ -22,6 +29,7 @@ do { \
         exit(1); \
     } \
 } while(0)
+
 class AesEncryptor {
 public:
     AesEncryptor() {
@@ -32,21 +40,27 @@ public:
         size_t totalGlobalMem, freeGlobalMem;
         CUDA_CHECK(cudaMemGetInfo(&freeGlobalMem, &totalGlobalMem));
         // Calculate data size based on available memory
-        dataSize_ = freeGlobalMem * 0.8;
+        dataSize_ = static_cast<size_t>(freeGlobalMem * 0.8 + 0.5);
+//        double dataSize_;
+//        dataSize_ = freeGlobalMem * 0.8;
         // Calculate number of blocks and threads per block
-        numBlocks_ = (dataSize_ + 15) / 16;
+        numBlocks_ = static_cast<int>((dataSize_ + 15) / 16);
+//        numBlocks_ = (dataSize_ + 15) / 16;
+//        size_t numBlocks_;
         numThreadsPerBlock_ = 256;
         // Allocate memory on GPU for input, output, and key
         CUDA_CHECK(cudaMalloc((void**)&input_gpu_, dataSize_));
         CUDA_CHECK(cudaMalloc((void**)&output_gpu_, dataSize_));
         CUDA_CHECK(cudaMalloc((void**)&key_gpu_, 176));
     }
+
     ~AesEncryptor() {
         // Free GPU memory
         CUDA_CHECK(cudaFree(input_gpu_));
         CUDA_CHECK(cudaFree(output_gpu_));
         CUDA_CHECK(cudaFree(key_gpu_));
     }
+
     void Encrypt(const uint8_t* input, uint8_t* output, const uint8_t* key) {
         // Copy input and key from host to GPU
         CUDA_CHECK(cudaMemcpy(input_gpu_, input, dataSize_, cudaMemcpyHostToDevice));
@@ -61,9 +75,11 @@ public:
         // Copy output from GPU to host
         CUDA_CHECK(cudaMemcpy(output, output_gpu_, dataSize_, cudaMemcpyDeviceToHost));
     }
+
     [[nodiscard]] size_t getDataSize() const {
         return dataSize_;
     }
+
 private:
     size_t dataSize_;
     int numBlocks_;
@@ -71,13 +87,16 @@ private:
     uint8_t* input_gpu_{};
     uint8_t* output_gpu_{};
     uint8_t* key_gpu_{};
+
     // SubBytes table
     static __device__ __constant__ uint8_t subBytesTable[16][16];
+
     // MixColumns matrix
     static __device__ __constant__ uint8_t mixColumnsMatrix[4][4];
+
     // Function to multiply two 8-bit values
     static __device__ uint8_t multiply(uint8_t a, uint8_t b) {
-        uint8_t result = 0;
+//        uint8_t result = 0;
         uint8_t mask = 0x01;
         uint8_t p = 0x00;
         for (int i = 0; i < 8; i++) {
@@ -93,6 +112,7 @@ private:
         }
         return p;
     }
+
     // CUDA kernel for AES encryption
     static __global__ void aesEncryptKernel(const uint8_t* input, uint8_t* output, const uint8_t* key) {
         // Variable declarations
@@ -103,10 +123,12 @@ private:
         for (int i = 0; i < 16; i++) {
             state[i] = input[idx * 16 + i];
         }
+
         // AddRoundKey for round 0
         for (int i = 0; i < 16; i++) {
             state[i] ^= key[i];
         }
+
         // AES encryption algorithm
         for (round = 1; round <= 9; round++) {
             // SubBytes
@@ -115,6 +137,7 @@ private:
                 int col = i & 0x0F;
                 i = subBytesTable[row][col];
             }
+
             // Shift the 1'st row to the right
             uint8_t temp = state[1];
             state[1] = state[5];
@@ -131,6 +154,7 @@ private:
             state[15] = state[11];
             state[11] = state[7];
             state[7] = temp;
+
             // MixColumns
             for (int col = 0; col < 4; col++) {
                 uint8_t s0 = state[col];
@@ -154,17 +178,20 @@ private:
                                   multiply(s2, mixColumnsMatrix[3][2]) ^
                                   multiply(s3, mixColumnsMatrix[3][3]);
             }
+
             // AddRoundKey
             for (int i = 0; i < 16; i++) {
                 state[i] ^= key[round * 16 + i];
             }
         }
+
         // SubBytes
         for (unsigned char& i : state) {
             int row = (i >> 4) & 0x0F;
             int col = i & 0x0F;
             i = subBytesTable[row][col];
         }
+
         // After mix columns are multiplied, ShiftRows again to the right
         uint8_t temp = state[1];
         state[1] = state[5];
@@ -179,16 +206,19 @@ private:
         state[15] = state[11];
         state[11] = state[7];
         state[7] = temp;
+
         // AddRoundKey for round 10
         for (int i = 0; i < 16; i++) {
             state[i] ^= key[160 + i];
         }
+
         // Copy state to output
         for (int i = 0; i < 16; i++) {
             output[idx * 16 + i] = state[i];
         }
     }
 };
+
 // Initialize constant arrays
 __device__ __constant__ uint8_t AesEncryptor::subBytesTable[16][16] = {
         {0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30,
@@ -224,45 +254,98 @@ __device__ __constant__ uint8_t AesEncryptor::subBytesTable[16][16] = {
         {0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41,
                 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16}
 };
+
 __device__ __constant__ uint8_t AesEncryptor::mixColumnsMatrix[4][4] = {
         {0x02, 0x03, 0x01, 0x01},
         {0x01, 0x02, 0x03, 0x01},
         {0x01, 0x01, 0x02, 0x03},
         {0x03, 0x01, 0x01, 0x02}
 };
-// Function to get input from user
-void getInput(uint8_t* input) {
-    std::cout << "Enter input data (16 bytes in hexadecimal): ";
-    for (int i = 0; i < 16; i++) {
-        std::cin >> std::hex >> input[i];
+
+// Function to get input file to be encrypted from user
+void getInputFile(uint8_t* input) {
+    std::ifstream inputFile("path/to/input/file.txt"); // Replace with the actual file path
+
+    if (inputFile.is_open()) {
+        for (int i = 0; i < 16; i++) {
+            int byte;
+            inputFile >> std::hex >> byte;
+            input[i] = static_cast<uint8_t>(byte);
+        }
+        inputFile.close();
+    } else {
+        std::cerr << "Failed to open input file." << std::endl;
+        // Handle the error accordingly
     }
 }
+
 // Function to get key from user
 void getKey(uint8_t* key) {
-    std::cout << "Enter key data (176 bytes in hexadecimal): ";
-    for (int i = 0; i < 176; i++) {
-        std::cin >> std::hex >> key[i];
+    std::string base64Key;
+    std::cout << "Enter base64 encoded key (32 bytes): ";
+    std::cin >> base64Key;
+
+    // Decode 256 bit aes base64 encoded key
+    std::vector<uint8_t> decodedKey;
+    decodedKey.reserve(32);
+
+    const std::string base64Chars =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    for (char c : base64Key) {
+        if (c == '=') {
+            break;
+        }
+
+        auto it = std::find(base64Chars.begin(), base64Chars.end(), c);
+        if (it != base64Chars.end()) {
+            auto index = static_cast<uint8_t>(std::distance(base64Chars.begin(), it));
+            decodedKey.push_back(index);
+        }
+    }
+
+    // Convert decoded key to hexadecimal
+    std::stringstream hexStream;
+    hexStream << std::hex << std::setfill('0');
+    for (uint8_t byte : decodedKey) {
+        hexStream << std::setw(2) << static_cast<int>(byte);
+    }
+
+    // Store key in the provided array
+    std::string hexKey = hexStream.str();
+    for (int i = 0; i < 32; i++) {
+        std::string byteString = hexKey.substr(i * 2, 2);
+        key[i] = static_cast<uint8_t>(std::stoi(byteString, nullptr, 16));
     }
 }
+
 int main() {
     // Test the AesEncryptor class
     AesEncryptor encryptor;
     // Test input data
     uint8_t input[16];
-    getInput(input);
+    getInputFile(input);
     // Test key data
     uint8_t key[176];
     getKey(key);
     // Perform encryption
     uint8_t output[16];
     encryptor.Encrypt(input, output, key);
-    // Print the encrypted output
-    for (unsigned char i : output) {
-        std::cout << std::hex << static_cast<int>(i) << " ";
-    }
-    std::cout << std::endl;
     // Get the data size
     size_t dataSize = encryptor.getDataSize();
-    std::cout << "Data size: " << dataSize << std::endl;
+
+    // Write the encrypted output to a file in the user's home directory
+    std::string homeDir = getenv("HOME");
+    std::ofstream outputFile(homeDir + "/encryptedFile.enc", std::ios::binary);
+    if (outputFile.is_open()) {
+        outputFile.write(reinterpret_cast<char*>(output), static_cast<std::streamsize>(dataSize));
+//        outputFile.write(reinterpret_cast<char*>(output), dataSize);
+        outputFile.close();
+        std::cout << "Encrypted file written to: " << homeDir << "/encryptedFile.enc" << std::endl;
+    } else {
+        std::cerr << "Failed to write encrypted file." << std::endl;
+        // Handle the error accordingly
+    }
+
     return 0;
 }
