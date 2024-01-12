@@ -1,4 +1,4 @@
-# AES-CUDA-Kernels 💻
+# AES-OpenCl-Kernels 💻
 This repository provides a GPU-accelerated solution for AES (Advanced Encryption Standard) encryption and decryption processes. By utilizing the power of the GPU, the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files offer significant performance improvements over traditional CPU-based implementations. ⚡️
 
 ## Features ✨
@@ -12,8 +12,8 @@ This repository provides a GPU-accelerated solution for AES (Advanced Encryption
 ## Installation 🛠️
 To use this GPU-accelerated AES encryption/decryption solution, follow these steps:
 1. Clone this repository to your local machine.
-2. Ensure you have the necessary CUDA toolkit installed.
-3. Compile the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files using your preferred CUDA compiler.
+2. Ensure you have the necessary OpenCl packages installed.
+3. Compile the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files using OpenCl.
 4. Link the generated object files with your project.
 5. Make sure to include the necessary header files in your code.
 
@@ -25,12 +25,6 @@ Contributions to this repository are welcome. If you have any ideas, improvement
 
 ## License 📝
 This repository is licensed under the [MIT License](LICENSE), allowing you to use, modify, and distribute the code freely.
-
-## Acknowledgments 🙏
-We would like to express our gratitude to the CUDA development team for providing the powerful tools and frameworks that made this GPU-accelerated AES encryption/decryption solution possible.
-
-## Disclaimer ⚠️
-The kernels in this repository are not sponsored, developed, or have anything to do with NVIDIA. Use at your own risk!!
 
 ## WARNING DO NOT TRY TO COMPILE, OR USE KERNELS YET!! ❗
 This project is in its infancy stage of development.
