@@ -8,5 +8,8 @@
 ### .idea files ###
 .idea
 
-### cmake-build-debug files ###
+### .vscode files ###
+.vscode
+
+### cmake-build-debug directory ###
 cmake-build-debug
