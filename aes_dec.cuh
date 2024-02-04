@@ -1,0 +1,4 @@
+#ifndef AES_CUDA_AES_DEC_CUH
+#define AES_CUDA_AES_DEC_CUH
+
+#endif //AES_CUDA_AES_DEC_CUH
