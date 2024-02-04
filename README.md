@@ -1,4 +1,4 @@
-# AES-OpenCl-Kernels 💻
+# AES-CUDA 💻
 This repository provides a GPU-accelerated solution for AES (Advanced Encryption Standard) encryption and decryption processes. By utilizing the power of the GPU, the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files offer significant performance improvements over traditional CPU-based implementations. ⚡️
 
 ## Features ✨
@@ -11,11 +11,17 @@ This repository provides a GPU-accelerated solution for AES (Advanced Encryption
 
 ## Installation 🛠️
 To use this GPU-accelerated AES encryption/decryption solution, follow these steps:
-1. Clone this repository to your local machine.
-2. Ensure you have the necessary OpenCl packages installed.
-3. Compile the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files using OpenCl.
-4. Link the generated object files with your project.
-5. Make sure to include the necessary header files in your code.
+- this project is still in its infancy, check back later for instructions...
+
+[//]: # (1. Clone this repository to your local machine.)
+
+[//]: # (2. Ensure you have the necessary OpenCl packages installed.)
+
+[//]: # (3. Compile the 'aes_encrypt_kernel.cu' and 'aes_decrypt_kernel.cu' files using OpenCl.)
+
+[//]: # (4. Link the generated object files with your project.)
+
+[//]: # (5. Make sure to include the necessary header files in your code.)
 
 ## Performance ⚡️
 The GPU acceleration provided by this repository offers significant performance improvements compared to traditional CPU-based AES encryption/decryption. The parallel processing capabilities of the GPU enable faster and more efficient encryption and decryption of data, making it ideal for applications that require high-speed cryptographic operations.
@@ -25,8 +31,5 @@ Contributions to this repository are welcome. If you have any ideas, improvement
 
 ## License 📝
 This repository is licensed under the [MIT License](LICENSE), allowing you to use, modify, and distribute the code freely.
-
-## WARNING DO NOT TRY TO COMPILE, OR USE KERNELS YET!! ❗
-This project is in its infancy stage of development.
 
 Happy GPU-accelerated AES encryption/decryption! 🎉
