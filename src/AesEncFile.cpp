@@ -1,4 +1,4 @@
-#include "cryptlib.h"
+#include <cryptlib.h>
 #include "rijndael.h"
 #include "modes.h"
 #include "files.h"
@@ -6,9 +6,11 @@
 #include "hex.h"
 #include <iostream>
 #include <string>
+#include <cstddef>
 
 int main()
 {
+    // TODO: get the key from the "KeyGen" class
     // Generate a random password protected 32 =-bit key
     CryptoPP::AutoSeededRandomPool rng;
     byte key[CryptoPP::AES::DEFAULT_KEYLENGTH];

@@ -7,6 +7,7 @@
 #include <memory>
 #include <chrono>
 #include <filesystem>
+#include <device_launch_parameters.h>
 
 // Macro for error checking
 #define CUDA_CHECK(call) cudaCheck(call, __FILE__, __LINE__)

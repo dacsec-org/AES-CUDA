@@ -1,39 +1,41 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cstdlib>
+#include <cstring>
 #include <cryptopp/osrng.h>
 #include <cryptopp/aes.h>
 #include <cryptopp/modes.h>
 #include <cryptopp/files.h>
 #include <cryptopp/base64.h>
+#include <cryptopp/pwdbased.h>
+#include <cryptopp/sha.h>
 
-/*
-KeyGen is a class  that uses the Crypto++ library to generate a password-protected 256-bit AES key and save it to the user's home directory in the "KryptFile" directory.
-*/
+typedef unsigned char byte;
+
 class KeyGen {
 public:
     void generateKey() {
         std::string password;
-        std::cout << "Please nter a strong password for the key: ";
+        std::cout << "Please enter a strong password for the key: ";
         std::getline(std::cin, password);
 
         // Check if key file already exists
         std::string homeDir = getenv("HOME");
         std::string kryptDir = homeDir + "/KryptFile";
         std::string keyFile = kryptDir + "/key.bin";
-
-        if (fileExists(keyFile)) {
+        if (std::filesystem::exists(keyFile)) {
             std::cout << "Key file already exists. Aborting key generation." << std::endl;
             return;
         }
 
         CryptoPP::AutoSeededRandomPool rng;
-        byte key[CryptoPP::AES::DEFAULT_KEYLENGTH];
-        byte iv[CryptoPP::AES::BLOCKSIZE];
+        CryptoPP::SecByteBlock key(CryptoPP::AES::DEFAULT_KEYLENGTH);
+        CryptoPP::SecByteBlock iv(CryptoPP::AES::BLOCKSIZE);
 
         // Generate random key and IV
-        rng.GenerateBlock(key, sizeof(key));
-        rng.GenerateBlock(iv, sizeof(iv));
+        rng.GenerateBlock(key, key.size());
+        rng.GenerateBlock(iv, iv.size());
 
         // Set password as the encryption key
         CryptoPP::SecByteBlock derivedKey(CryptoPP::AES::DEFAULT_KEYLENGTH);
@@ -42,13 +44,12 @@ public:
 
         // Encrypt the key using derived key and IV
         CryptoPP::CBC_Mode<CryptoPP::AES>::Encryption encryption(derivedKey, derivedKey.size(), iv);
-        CryptoPP::ArraySink encryptedKey(key, sizeof(key));
-        CryptoPP::ArraySource(key, sizeof(key), true, new CryptoPP::StreamTransformationFilter(encryption, new CryptoPP::Redirector(encryptedKey)));
+        CryptoPP::ArraySink encryptedKey(key, key.size());
+        CryptoPP::ArraySource(key, key.size(), true, new CryptoPP::StreamTransformationFilter(encryption, new CryptoPP::Redirector(encryptedKey)));
 
         // Create the KryptFile directory if it doesn't exist
-        if (!createDirectory(kryptDir)) {
-            std::cout << "Failed to create KryptFile directory." << std::endl;
-            return;
+        if (!std::filesystem::exists(kryptDir)) {
+            std::filesystem::create_directory(kryptDir);
         }
 
         // Write the encrypted key to the file
@@ -57,37 +58,18 @@ public:
             std::cout << "Failed to open key file for writing." << std::endl;
             return;
         }
+        outputFile.write(reinterpret_cast<const char*>(encryptedKey.GetArray()), encryptedKey.SizeInBytes());
+        outputFile.close();
 
-        CryptoPP::Base64Encoder encoder(new CryptoPP::FileSink(outputFile));
-        encoder.Put(encryptedKey, sizeof(key));
-        encoder.MessageEnd();
-
+        // Securely wipe the memory
+        derivedKey.Assign(derivedKey.size(), 0x00);
+        password.assign(password.size(), '0');
         std::cout << "Key generated and saved to " << keyFile << std::endl;
-    }
-
-private:
-    bool fileExists(const std::string& filename) {
-        std::ifstream file(filename);
-        return file.good();
-    }
-
-    bool createDirectory(const std::string& directory) {
-        int result = mkdir(directory.c_str(), 0700);
-        if (result == 0) {
-            return true;
-        }
-        else if (errno == EEXIST) {
-            return true;
-        }
-        else {
-            return false;
-        }
     }
 };
 
 int main() {
     KeyGen keyGen;
     keyGen.generateKey();
-
     return 0;
 }
